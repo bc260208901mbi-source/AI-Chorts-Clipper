@@ -1,0 +1,6 @@
+Flask>=3.0.0
+python-dotenv>=1.0.0
+srt>=3.5.3
+pydantic>=2.7.0
+groq>=0.15.0
+google-genai>=1.0.0

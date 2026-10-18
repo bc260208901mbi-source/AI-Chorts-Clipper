@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Shorts Clipper</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <p class="eyebrow">Local AI video tool</p>
+      <h1>AI Shorts Clipper</h1>
+      <p class="subtitle">
+        Upload a video and its SRT subtitle file. The app finds strong moments anywhere in the video
+        and renders exactly 60-second vertical Shorts with burned-in captions.
+      </p>
+    </header>
+
+    <section class="panel">
+      <form id="generate-form">
+        <div class="grid two">
+          <label class="file-field">
+            <span>Video file</span>
+            <input type="file" id="video" name="video" accept=".mp4,.mov,.mkv,.webm,.avi,.m4v" required />
+            <small>MP4, MOV, MKV, WEBM, AVI, M4V</small>
+          </label>
+
+          <label class="file-field">
+            <span>Subtitle file (SRT)</span>
+            <input type="file" id="srt" name="srt" accept=".srt" required />
+            <small>Matching .srt for the uploaded video</small>
+          </label>
+        </div>
+
+        <div class="grid two">
+          <label class="field">
+            <span>AI provider</span>
+            <select id="provider" name="provider">
+              <option value="groq">Groq</option>
+              <option value="gemini">Gemini</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Number of clips</span>
+            <select id="clip_count" name="clip_count">
+              <option value="3">3 clips</option>
+              <option value="4">4 clips</option>
+            </select>
+          </label>
+        </div>
+
+        <button type="submit" id="submit-btn" class="primary">Analyze &amp; Generate Shorts</button>
+      </form>
+
+      <div id="status-box" class="status-box hidden" aria-live="polite">
+        <div class="status-row">
+          <span id="status-message">Preparing…</span>
+          <span id="status-percent">0%</span>
+        </div>
+        <div class="progress-track">
+          <div id="progress-bar" class="progress-bar" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <div id="error-box" class="error-box hidden" role="alert"></div>
+    </section>
+
+    <section id="results" class="results hidden">
+      <h2>Generated Shorts</h2>
+      <div id="warning-box" class="warning-box hidden"></div>
+      <div id="results-list" class="results-list"></div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
