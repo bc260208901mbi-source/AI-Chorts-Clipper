@@ -78,9 +78,12 @@ function renderClips(clips, warning) {
 
     const meta = document.createElement("div");
     meta.className = "clip-meta";
+        const durationLabel =
+      clip.duration_display ||
+      `${Math.round((clip.end_seconds || 0) - (clip.start_seconds || 0))}s`;
     const pills = [
       `${clip.start_display} → ${clip.end_display}`,
-      "60s",
+      durationLabel,
       `Score ${Number(clip.score || 0).toFixed(1)}`,
     ];
     pills.forEach((text) => {

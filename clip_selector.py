@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import math
-from typing import Iterable
 
 from llm_providers import ProviderError, get_provider
 from subtitle_utils import format_timestamp, nearest_cue_start
 
 
-CLIP_DURATION = 60.0
+MIN_CLIP_SECONDS = 15.0
+MAX_CLIP_SECONDS = 180.0
 MAX_CHUNK_CHARS = 12_000
 CHUNK_OVERLAP_CUES = 15
 MIN_OVERLAP_SECONDS = 5.0
@@ -72,31 +72,28 @@ def _normalize_candidate(raw: dict, video_duration: float, cues: list[dict]) -> 
     """Validate and normalise a single LLM candidate. Returns None if unusable."""
     try:
         start = float(raw["start_seconds"])
+        end = float(raw["end_seconds"])
     except (KeyError, TypeError, ValueError):
         return None
 
-    if not math.isfinite(start):
+    if not math.isfinite(start) or not math.isfinite(end):
         return None
 
-    # Snap to a nearby cue boundary so clips do not start mid-sentence.
+    # Snap start to the nearest cue boundary so clips do not begin mid-sentence.
     start = nearest_cue_start(cues, start, max_distance=SNAP_DISTANCE_SECONDS)
 
-    # Enforce exact 60-second duration.
-    end = start + CLIP_DURATION
-
-    # Clamp within the video.
     if start < 0:
         start = 0.0
-        end = CLIP_DURATION
-    if video_duration and start + CLIP_DURATION > video_duration + 0.5:
-        # Try to slide the window left so it still fits.
-        max_start = max(0.0, video_duration - CLIP_DURATION)
-        if max_start < 0:
-            return None
-        start = max_start
-        end = start + CLIP_DURATION
 
-    if video_duration and start + CLIP_DURATION > video_duration + 0.5:
+    # Clamp end to the video length.
+    if video_duration and end > video_duration:
+        end = video_duration
+
+    if end <= start:
+        return None
+
+    duration = end - start
+    if duration < MIN_CLIP_SECONDS or duration > MAX_CLIP_SECONDS:
         return None
 
     title = str(raw.get("title", "")).strip() or "Untitled moment"
@@ -111,6 +108,7 @@ def _normalize_candidate(raw: dict, video_duration: float, cues: list[dict]) -> 
     return {
         "start_seconds": round(start, 3),
         "end_seconds": round(end, 3),
+        "duration_seconds": round(duration, 2),
         "title": title[:200],
         "hook": hook[:300],
         "reason": reason[:800],
@@ -135,9 +133,10 @@ def select_clips(
     if not cues:
         raise SelectionError("No subtitle cues were parsed.")
 
-    if video_duration < CLIP_DURATION:
+    if video_duration < MIN_CLIP_SECONDS:
         raise SelectionError(
-            f"The video is only {video_duration:.1f}s long. At least {CLIP_DURATION:.0f}s is required."
+            f"The video is only {video_duration:.1f}s long. "
+            f"At least {MIN_CLIP_SECONDS:.0f}s is required."
         )
 
     provider = get_provider(provider_name)
@@ -153,7 +152,8 @@ def select_clips(
             f"This is chunk {idx + 1} of {len(chunks)}. "
             f"Its absolute time range is {format_timestamp(chunk_start)} to {format_timestamp(chunk_end)}. "
             f"The full video is {video_duration:.1f} seconds long. "
-            f"Return up to {clip_count} strong candidates whose start times fall inside this chunk."
+            f"Return up to {clip_count} strong candidates whose start times fall inside this chunk. "
+            f"Pick each clip's natural length between {int(MIN_CLIP_SECONDS)} and {int(MAX_CLIP_SECONDS)} seconds."
         )
         try:
             raw_clips = provider.analyze(transcript, clip_count, context=context)
@@ -173,12 +173,11 @@ def select_clips(
 
     if not normalized:
         raise SelectionError(
-            "All model candidates were invalid (bad timestamps or outside the video)."
+            "All model candidates were invalid (bad timestamps, wrong duration, or outside the video)."
         )
 
     deduped = dedupe_candidates(normalized)
 
-    # Prefer high scores, then chronological order for the final list.
     deduped.sort(key=lambda c: float(c["score"]), reverse=True)
     selected = deduped[:clip_count]
     selected.sort(key=lambda c: c["start_seconds"])

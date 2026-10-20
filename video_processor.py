@@ -159,11 +159,13 @@ def render_clip(
     if not os.path.isfile(output_path) or os.path.getsize(output_path) == 0:
         raise VideoError("FFmpeg reported success but the output file is missing or empty.")
 
-    # Validate duration tolerance.
+    # Validate duration tolerance relative to the requested clip length.
     rendered_duration = probe_duration(output_path)
-    if not (59.0 <= rendered_duration <= 61.5):
+    tolerance = max(1.5, duration * 0.04)
+    if not (duration - tolerance <= rendered_duration <= duration + tolerance):
         raise VideoError(
-            f"Rendered clip duration is {rendered_duration:.2f}s, outside the expected ~60s window."
+            f"Rendered clip duration is {rendered_duration:.2f}s, "
+            f"outside the expected {duration:.1f}s ± {tolerance:.1f}s window."
         )
 
     return output_path

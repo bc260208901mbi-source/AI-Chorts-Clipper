@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -20,13 +19,22 @@ except ImportError:  # pragma: no cover
     genai = None  # type: ignore
 
 
+MIN_CLIP_SECONDS = 15.0
+MAX_CLIP_SECONDS = 180.0
+
+
 class ProviderError(Exception):
     """Raised when an LLM provider fails or returns unusable output."""
 
 
 class ClipCandidateModel(BaseModel):
     start_seconds: float = Field(description="Absolute start time of the clip in seconds.")
-    end_seconds: float = Field(description="Absolute end time of the clip in seconds. Must equal start_seconds + 60.")
+    end_seconds: float = Field(
+        description=(
+            "Absolute end time of the clip in seconds. Must be greater than start_seconds. "
+            f"Clip length must be between {int(MIN_CLIP_SECONDS)} and {int(MAX_CLIP_SECONDS)} seconds."
+        )
+    )
     title: str = Field(description="Short, punchy title for the clip.")
     hook: str = Field(description="The opening hook that grabs attention.")
     reason: str = Field(description="Why this moment makes a strong standalone Short.")
@@ -36,15 +44,10 @@ class ClipCandidateModel(BaseModel):
 class AnalysisResponse(BaseModel):
     clips: list[ClipCandidateModel]
 
-SYSTEM_PROMPT = """You are an expert short-form video editor who creates viral YouTube Shorts by stitching together the best moments from a long video.
 
-You will receive a timestamped transcript of a long video. Your job is to build Shorts — but NOT as one continuous cut. Each Short is assembled from multiple non-contiguous segments pulled from anywhere in the video (for example: 25s from the intro + 35s from the middle, or 15s + 20s + 25s from three different sections). You are the editor with the scissors: keep only what earns its place.
+SYSTEM_PROMPT = """You are an expert short-form video editor who creates viral YouTube Shorts.
 
-LENGTH PHILOSOPHY:
-- 60 seconds is the target, not a cage. Aim for roughly 45–75 seconds.
-- The idea wins over the clock. If the idea resolves at 38s, stop at 38s. If it needs 82s to land properly, take 82s.
-- Never pad to hit a number, and never clip a payoff short to hit a number.
-- Hard ceiling: 90 seconds. Hard floor: 30 seconds. If the best possible cut falls outside that, return fewer clips instead of forcing a weak one.
+You will receive a timestamped transcript of a long video. Identify the strongest standalone moments that can each become a Short.
 
 Prioritise:
 - Interesting stories and complete narrative arcs.
@@ -52,48 +55,84 @@ Prioritise:
 - Useful explanations and actionable advice.
 - Strong hooks, engaging dialogue, and memorable conclusions.
 - Segments that make sense without outside context.
-- Pairs of moments that land harder together than apart (setup here, payoff there).
 
 Avoid:
 - Repetitive, boring, incomplete, or confusing passages.
-- Segments that start in the middle of a sentence.
-- Segments that end abruptly before the main point is delivered.
-- Overlapping or nearly identical moments — both across clips and within a single clip.
-- Cuts that make the speaker appear to say something they didn't (no Frankenstein sentences).
+- Clips that start in the middle of a sentence.
+- Clips that end abruptly before the main point is delivered.
+- Overlapping or nearly identical moments.
 
-RULES FOR SEGMENTS:
-1. Every segment must start AND end on a real subtitle cue boundary that exists in the transcript. Never invent timestamps.
-2. Every segment must begin and end on a complete thought — never mid-sentence, never before the point lands.
-3. Each clip must contain between 1 and 5 segments. Use the fewest cuts that still produce the strongest Short; prefer 2–3. A single continuous segment is allowed when one clean run is genuinely stronger than any assembly.
-4. Within a clip, segments must not overlap.
-5. Segments within a clip may come from any point in the video and may be reordered — put the strongest hook first, even if it originally appeared later.
-6. Cuts must feel intentional, not accidental: each jump should be motivated by content (setup → payoff, claim → proof, question → answer). Do not cut away mid-argument.
-7. The first segment must open with a hook. The final segment must deliver the conclusion or payoff. The clip is finished when the idea is finished — not when a timer hits zero.
-8. `total_seconds` must equal the exact sum of all segment durations in that clip.
+DURATION RULES (important):
+1. Choose the natural duration of each Short. Do NOT pad or truncate to a fixed length.
+2. Minimum total duration: {min_s}s. Maximum total duration: {max_s}s.
+3. Total duration is the SUM of all selected segments, not the time between the first start and final end.
+4. end_seconds MUST be greater than start_seconds for every segment.
+5. Start times should align with subtitle cue boundaries and complete thoughts.
+6. Do NOT invent timestamps. Only use timestamps that exist in the transcript.
+7. Return between 1 and {clip_count} Shorts. If there are not enough strong moments, return fewer.
 
-RULES FOR OUTPUT:
-1. Return between 1 and {clip_count} clips. If there are not enough strong moments, return fewer.
-2. Do not reuse the same source moment across different clips.
-3. Do not invent timestamps. Only use timestamps that exist in the transcript.
-4. Return ONLY valid JSON. No markdown, no commentary, no code fences.
+MULTI-SEGMENT CLIPS:
+1. Each Short may contain 1–4 separate segments from the original video.
+2. A segment has its own start_seconds and end_seconds.
+3. Combine useful moments from different parts of the video into ONE Short when doing so improves the story.
+4. Skip irrelevant, repetitive, silent, or boring material between selected segments.
+5. Arrange segments in chronological order.
+6. Ensure the combined segments form a coherent story with a strong opening and satisfying conclusion.
+7. Prefer a continuous segment when it communicates the idea effectively. Do not create unnecessary cuts.
+8. The total duration of all segments combined must satisfy the minimum and maximum duration rules.
+9. Do not select overlapping segments or repeat the same content.
+10. Each Short's segments must come from the same original video.
+11. The first segment should usually contain the hook. Later segments should develop the idea, provide evidence, or deliver the conclusion.
+12. Choose natural cut points that avoid cutting off words or important dialogue.
+13. Do not assume gaps between segments will be included in the final Short.
+14. The video-processing program will concatenate the selected segments in the order returned.
+
+OUTPUT REQUIREMENTS:
+- Return ONLY valid JSON.
+- Do not include Markdown, explanations, or commentary outside the JSON.
+- Use numeric values for timestamps and scores.
+- Every Short must contain a "segments" array, even if it has only one segment.
+- The score should represent the estimated quality of the complete assembled Short, from 1 to 10.
 
 JSON shape:
 {{
   "clips": [
     {{
-      "segments": [
-        {{"start_seconds": 12.34, "end_seconds": 37.34}},
-        {{"start_seconds": 75.10, "end_seconds": 110.10}}
-      ],
-      "total_seconds": 60.0,
       "title": "Short title",
-      "hook": "Opening line of the first segment",
-      "stitch": "One sentence on why these specific segments belong together and how the jump reads.",
-      "reason": "Why this works as a standalone Short.",
-      "score": 8.5
+      "hook": "Opening line or hook",
+      "reason": "Why this assembled Short works as a standalone video",
+      "score": 8.5,
+      "segments": [
+        {{
+          "start_seconds": 0.0,
+          "end_seconds": 10.0
+        }},
+        {{
+          "start_seconds": 30.0,
+          "end_seconds": 45.0
+        }},
+        {{
+          "start_seconds": 75.0,
+          "end_seconds": 90.0
+        }}
+      ]
     }}
   ]
 }}"""
+
+
+def _build_prompt(clip_count: int, context: str, transcript: str) -> str:
+    return (
+        SYSTEM_PROMPT.format(
+            clip_count=clip_count,
+            min_s=int(MIN_CLIP_SECONDS),
+            max_s=int(MAX_CLIP_SECONDS),
+        )
+        + "\n\n"
+        + (context + "\n\n" if context else "")
+        + "TRANSCRIPT:\n"
+        + transcript
+    )
 
 
 def _clean_json_text(text: str) -> str:
@@ -137,13 +176,7 @@ class GroqProvider:
         self.model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
 
     def analyze(self, transcript: str, clip_count: int, context: str = "") -> list[dict]:
-        prompt = (
-            SYSTEM_PROMPT.format(clip_count=clip_count)
-            + "\n\n"
-            + (context + "\n\n" if context else "")
-            + "TRANSCRIPT:\n"
-            + transcript
-        )
+        prompt = _build_prompt(clip_count, context, transcript)
         messages = [
             {"role": "system", "content": "You return only valid JSON."},
             {"role": "user", "content": prompt},
@@ -183,13 +216,7 @@ class GeminiProvider:
         self.model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
 
     def analyze(self, transcript: str, clip_count: int, context: str = "") -> list[dict]:
-        prompt = (
-            SYSTEM_PROMPT.format(clip_count=clip_count)
-            + "\n\n"
-            + (context + "\n\n" if context else "")
-            + "TRANSCRIPT:\n"
-            + transcript
-        )
+        prompt = _build_prompt(clip_count, context, transcript)
 
         last_error: Exception | None = None
         for attempt in range(2):

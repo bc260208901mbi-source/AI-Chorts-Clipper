@@ -92,7 +92,7 @@ def _process_job(job_id: str, video_path: str, srt_path: str, provider: str, cli
             job_id,
             status="selecting",
             progress=30,
-            message="Asking the AI to find strong 60-second moments…",
+            message="Asking the AI to find strong moments…",
         )
         clips, warning = select_clips(cues, duration, clip_count, provider)
 
@@ -108,25 +108,29 @@ def _process_job(job_id: str, video_path: str, srt_path: str, provider: str, cli
         total = max(1, len(clips))
         for idx, clip in enumerate(clips):
             start = clip["start_seconds"]
+            end = clip["end_seconds"]
+            clip_duration = round(end - start, 3)
             output_name = f"short_{idx + 1:02d}.mp4"
             output_path = os.path.join(_jobs[job_id]["dir"], output_name)
             clip_srt_path = os.path.join(_jobs[job_id]["dir"], f"short_{idx + 1:02d}.srt")
 
-            build_clip_srt(cues, start, 60.0, clip_srt_path)
+            build_clip_srt(cues, start, clip_duration, clip_srt_path)
 
             _update_job(
                 job_id,
                 progress=45 + int(45 * idx / total),
-                message=f"Rendering clip {idx + 1} of {len(clips)}…",
+                message=f"Rendering clip {idx + 1} of {len(clips)} ({clip_duration:.0f}s)…",
             )
 
-            render_clip(video_path, clip_srt_path, start, output_path, duration=60.0)
+            render_clip(video_path, clip_srt_path, start, output_path, duration=clip_duration)
 
             results.append(
                 {
                     **clip,
-                    "start_display": format_timestamp_short(clip["start_seconds"]),
-                    "end_display": format_timestamp_short(clip["end_seconds"]),
+                    "duration_seconds": clip_duration,
+                    "duration_display": f"{int(round(clip_duration))}s",
+                    "start_display": format_timestamp_short(start),
+                    "end_display": format_timestamp_short(end),
                     "filename": output_name,
                     "url": f"/media/{job_id}/{output_name}",
                     "download_url": f"/download/{job_id}/{output_name}",
